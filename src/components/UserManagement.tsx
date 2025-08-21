@@ -2,7 +2,10 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useToast } from "@/hooks/use-toast";
 import { 
   ArrowLeft, 
   Send, 
@@ -15,7 +18,10 @@ import {
   Clock,
   Mail,
   Package,
-  Calendar
+  Calendar,
+  Link,
+  X,
+  Loader2
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -43,7 +49,15 @@ const UserManagement = () => {
   const [tempLinks, setTempLinks] = useState<TempLink[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const [showDialog, setShowDialog] = useState(false);
+  const [dialogType, setDialogType] = useState<'send' | 'edit'>('send');
+  const [currentUser, setCurrentUser] = useState<{email: string; token: string; productId: string; currentLink?: string}>({
+    email: '', token: '', productId: '', currentLink: ''
+  });
+  const [driveLink, setDriveLink] = useState("");
+  const [actionLoading, setActionLoading] = useState(false);
   const navigate = useNavigate();
+  const { toast } = useToast();
 
   useEffect(() => {
     // Simulate fetching data with loading animation
@@ -78,54 +92,73 @@ const UserManagement = () => {
     }, 1000);
   }, []);
 
-  const handleSendDriveLink = async (token: string, email: string) => {
-    const link = prompt(`Enter Drive Link for ${email}`);
-    if (!link) return;
-
-    try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      alert("✅ Drive link sent successfully!");
-      playNotificationSound();
-      
-      setTempLinks((prev) =>
-        prev.map((item) =>
-          item.token === token
-            ? { ...item, driveLink: link, status: "📦 Ready" }
-            : item
-        )
-      );
-    } catch (error) {
-      console.error("❌ Error sending drive link:", error);
-      alert("❌ Failed to send drive link.");
-    }
+  const openSendDialog = (token: string, email: string) => {
+    setCurrentUser({ email, token, productId: '', currentLink: '' });
+    setDialogType('send');
+    setDriveLink('');
+    setShowDialog(true);
   };
 
-  const handleEditDriveLink = async (
-    email: string,
-    productId: string,
-    currentLink: string | null
-  ) => {
-    const newLink = prompt("Enter new drive link:", currentLink || "");
-    if (!newLink || newLink === currentLink) return;
+  const openEditDialog = (email: string, productId: string, currentLink: string | null) => {
+    setCurrentUser({ email, token: '', productId, currentLink: currentLink || '' });
+    setDialogType('edit');
+    setDriveLink(currentLink || '');
+    setShowDialog(true);
+  };
+
+  const handleDialogSubmit = async () => {
+    if (!driveLink.trim()) {
+      toast({
+        title: "Error",
+        description: "Please enter a valid drive link",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setActionLoading(true);
 
     try {
       // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      alert("✅ Drive link updated and confirmation sent!");
-      
-      setTempLinks((prev) =>
-        prev.map((item) =>
-          item.email === email && item.productId === productId
-            ? { ...item, driveLink: newLink }
-            : item
-        )
-      );
+      await new Promise(resolve => setTimeout(resolve, 1500));
+
+      if (dialogType === 'send') {
+        setTempLinks((prev) =>
+          prev.map((item) =>
+            item.token === currentUser.token
+              ? { ...item, driveLink: driveLink, status: "📦 Ready" }
+              : item
+          )
+        );
+        toast({
+          title: "Success",
+          description: `Drive link sent to ${currentUser.email}`,
+        });
+        playNotificationSound();
+      } else {
+        setTempLinks((prev) =>
+          prev.map((item) =>
+            item.email === currentUser.email && item.productId === currentUser.productId
+              ? { ...item, driveLink: driveLink }
+              : item
+          )
+        );
+        toast({
+          title: "Success",
+          description: "Drive link updated and confirmation sent!",
+        });
+      }
+
+      setShowDialog(false);
+      setDriveLink('');
     } catch (error) {
-      console.error("❌ Error updating drive link:", error);
-      alert("❌ Failed to update drive link.");
+      toast({
+        title: "Error",
+        description: "Failed to process request. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setActionLoading(false);
     }
   };
 
@@ -345,38 +378,42 @@ const UserManagement = () => {
                           </Badge>
                         </td>
                         <td className="p-4">
-                          <div className="flex gap-2 flex-wrap">
+                          <div className="flex gap-2 flex-wrap items-center">
                             {!link.driveLink && !link.status.includes("Expired") ? (
                               <Button
-                                variant="outline"
+                                variant="default"
                                 size="sm"
-                                onClick={() => handleSendDriveLink(link.token, link.email)}
-                                className="flex items-center gap-1 btn-primary text-white border-0 hover:scale-105"
+                                onClick={() => openSendDialog(link.token, link.email)}
+                                className="btn-primary text-white border-0 hover-scale shadow-glow min-w-[80px] h-8 px-3"
                               >
-                                <Send className="w-3 h-3" />
-                                <span className="hidden sm:inline">Send Link</span>
+                                <Send className="w-3.5 h-3.5 shrink-0" />
+                                <span className="hidden sm:inline ml-1.5">Send</span>
                               </Button>
                             ) : (
-                              <span className="text-xs text-muted-foreground px-2 py-1 bg-secondary/30 rounded">
-                                {link.driveLink ? "✅ Sent" : "⛔ Expired"}
-                              </span>
+                              <div className="flex items-center gap-1.5 text-xs text-muted-foreground px-2.5 py-1.5 bg-secondary/30 rounded-md border">
+                                {link.driveLink ? (
+                                  <>
+                                    <CheckCircle className="w-3 h-3 text-emerald-600" />
+                                    <span>Sent</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <AlertCircle className="w-3 h-3 text-destructive" />
+                                    <span>Expired</span>
+                                  </>
+                                )}
+                              </div>
                             )}
 
                             {link.driveLink && (
                               <Button
-                                variant="ghost"
+                                variant="outline"
                                 size="sm"
-                                onClick={() =>
-                                  handleEditDriveLink(
-                                    link.email,
-                                    link.productId,
-                                    link.driveLink
-                                  )
-                                }
-                                className="text-accent hover:text-accent/80 hover:bg-accent/10"
+                                onClick={() => openEditDialog(link.email, link.productId, link.driveLink)}
+                                className="border-border/50 hover:bg-secondary/50 hover-scale min-w-[70px] h-8 px-3"
                               >
-                                <Pencil className="w-3 h-3" />
-                                <span className="hidden sm:inline ml-1">Edit</span>
+                                <Pencil className="w-3.5 h-3.5 shrink-0" />
+                                <span className="hidden sm:inline ml-1.5">Edit</span>
                               </Button>
                             )}
                           </div>
@@ -403,6 +440,83 @@ const UserManagement = () => {
           </CardContent>
         </Card>
       </main>
+
+      {/* Drive Link Input Dialog */}
+      <Dialog open={showDialog} onOpenChange={setShowDialog}>
+        <DialogContent className="sm:max-w-md glass-card border-0 shadow-premium">
+          <DialogHeader className="space-y-3">
+            <DialogTitle className="flex items-center gap-2 text-foreground">
+              <Link className="w-5 h-5 text-primary" />
+              {dialogType === 'send' ? 'Send Drive Link' : 'Edit Drive Link'}
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              {dialogType === 'send' 
+                ? `Send a Google Drive link to ${currentUser.email}` 
+                : `Update the drive link for ${currentUser.email}`
+              }
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="driveLink" className="text-sm font-medium text-foreground">
+                Google Drive Link
+              </Label>
+              <Input
+                id="driveLink"
+                value={driveLink}
+                onChange={(e) => setDriveLink(e.target.value)}
+                placeholder="https://drive.google.com/file/d/..."
+                className="h-11 bg-secondary/30 border-border/50 focus:border-primary focus:ring-primary/20"
+                disabled={actionLoading}
+              />
+            </div>
+
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-sm font-medium text-blue-800">Important</p>
+                  <p className="text-xs text-blue-700 mt-1">
+                    Make sure the drive link is publicly accessible and the user has download permissions.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setShowDialog(false)}
+              disabled={actionLoading}
+              className="border-border/50"
+            >
+              <X className="w-4 h-4 mr-2" />
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={handleDialogSubmit}
+              disabled={actionLoading || !driveLink.trim()}
+              className="btn-primary text-white hover-scale shadow-glow min-w-[100px]"
+            >
+              {actionLoading ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  {dialogType === 'send' ? 'Sending...' : 'Updating...'}
+                </>
+              ) : (
+                <>
+                  <Send className="w-4 h-4 mr-2" />
+                  {dialogType === 'send' ? 'Send Link' : 'Update Link'}
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
