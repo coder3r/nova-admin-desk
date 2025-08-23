@@ -9,6 +9,8 @@ import AdminLogin from "./components/AdminLogin";
 import EditProduct from "./components/EditProduct";
 import ProductManagement from "./components/ProductManagement";
 import UserManagement from "./components/UserManagement";
+import AdminAnalytics from "./pages/AdminAnalytics";
+import AdminSettings from "./pages/AdminSettings";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 
@@ -72,6 +74,22 @@ const App = () => (
             element={
               <ProtectedRoute>
                 <UserManagement />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/analytics"
+            element={
+              <ProtectedRoute>
+                <AdminAnalytics />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/settings"
+            element={
+              <ProtectedRoute>
+                <AdminSettings />
               </ProtectedRoute>
             }
           />

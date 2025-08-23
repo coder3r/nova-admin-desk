@@ -34,11 +34,6 @@ interface DashboardStats {
   totalOrders: number;
 }
 
-const playNotificationSound = () => {
-  const audio = new Audio("/sounds/notify.mp3");
-  audio.play().catch((err) => console.warn("🔇 Sound error:", err));
-};
-
 const AdminDashboard = () => {
   const [stats, setStats] = useState<DashboardStats>({
     totalProducts: 0,
@@ -52,8 +47,6 @@ const AdminDashboard = () => {
     "granted" | "denied" | "default"
   >("default");
   const navigate = useNavigate();
-
-  const API_SOCKET_URL = import.meta.env.VITE_API_SOCKET_URL;
 
   useEffect(() => {
     // Simulate loading dashboard stats with animation
@@ -91,6 +84,31 @@ const AdminDashboard = () => {
     localStorage.removeItem("admin");
     localStorage.removeItem("token");
     navigate("/admin/login");
+  };
+
+  const handleNavigation = (id: string) => {
+    setActiveTab(id);
+    setSidebarOpen(false);
+    
+    switch (id) {
+      case "dashboard":
+        // Stay on dashboard
+        break;
+      case "products":
+        navigate("/admin/products");
+        break;
+      case "users":
+        navigate("/admin/users");
+        break;
+      case "analytics":
+        navigate("/admin/analytics");
+        break;
+      case "settings":
+        navigate("/admin/settings");
+        break;
+      default:
+        break;
+    }
   };
 
   const sidebarItems = [
@@ -166,8 +184,8 @@ const AdminDashboard = () => {
                   <Zap className="w-6 h-6 text-white" />
                 </div>
                 <div>
-                  <h2 className="text-xl font-bold text-gradient">Nova Admin</h2>
-                  <p className="text-xs text-muted-foreground">Premium Portal</p>
+                  <h2 className="text-xl font-bold text-gradient">Admin Portal</h2>
+                  <p className="text-xs text-muted-foreground">Diwanu Admin</p>
                 </div>
               </div>
               <Button
@@ -189,10 +207,7 @@ const AdminDashboard = () => {
               return (
                 <button
                   key={item.id}
-                  onClick={() => {
-                    setActiveTab(item.id);
-                    setSidebarOpen(false);
-                  }}
+                  onClick={() => handleNavigation(item.id)}
                   className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all duration-300 group animate-slide-up ${
                     isActive
                       ? "bg-gradient-primary text-white shadow-premium scale-105"
@@ -241,7 +256,7 @@ const AdminDashboard = () => {
                   Dashboard Overview
                 </h1>
                 <p className="text-muted-foreground text-sm lg:text-base">
-                  Welcome back! Monitor your platform's performance
+                  Welcome back! Diwanu Admin Portal.
                 </p>
               </div>
             </div>
@@ -372,6 +387,7 @@ const AdminDashboard = () => {
                     </div>
                   </Button>
                   <Button
+                    onClick={() => navigate("/admin/analytics")}
                     variant="outline"
                     className="h-20 border-border/50 hover:bg-secondary/50 transition-all duration-300 hover:scale-105"
                   >
