@@ -8,7 +8,6 @@ import {
   Mail,
   Palette,
   Save,
-  Security,
   Settings,
   Shield,
   User,
