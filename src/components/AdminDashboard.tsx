@@ -5,10 +5,15 @@ import {
   BarChart3,
   Bell,
   BellOff,
+  BellRing,
   ChevronRight,
   Clock,
   DollarSign,
+  Eye,
+  EyeOff,
+  IndianRupee,
   LayoutDashboard,
+  Lock,
   LogOut,
   Menu,
   Package,
@@ -22,6 +27,12 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  hasNotificationPermission,
+  listenToForegroundMessages,
+  requestNotificationPermission,
+  shouldSkipNotificationSetup,
+} from "../firebase/firebase-messaging";
 import { Button } from "./../components/ui/button";
 import {
   Card,
@@ -104,6 +115,7 @@ interface NovaAdminGlobals {
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 const ANIMATION_DURATION = 2000;
 const STATS_ANIMATION_SPEED = 30;
+const NOTIFICATION_POPUP_DELAY = 2000;
 
 // Cache Management Utilities
 class CacheManager {
@@ -245,7 +257,7 @@ const getActivityIcon = (type: string) => {
     user: Users,
     order: ShoppingCart,
     product: Package,
-    payment: DollarSign,
+    payment: IndianRupee,
     system: Settings,
     default: Activity,
   };
@@ -259,6 +271,31 @@ const getPriorityColor = (priority: string = "medium") => {
     low: "bg-green-500",
   };
   return colorMap[priority] || colorMap.medium;
+};
+
+// Check if notification popup should be shown
+const shouldShowNotificationPopup = (): boolean => {
+  // Don't show if already granted or denied
+  if (hasNotificationPermission() || Notification.permission === "denied") {
+    return false;
+  }
+
+  // Don't show if user dismissed in this session
+  if (sessionStorage.getItem("fcm_popup_dismissed") === "true") {
+    return false;
+  }
+
+  // Don't show if permission was previously denied
+  if (localStorage.getItem("fcm_permission_denied") === "true") {
+    return false;
+  }
+
+  // Don't show if setup was recently completed
+  if (shouldSkipNotificationSetup()) {
+    return false;
+  }
+
+  return true;
 };
 
 // Global cache declaration
@@ -291,16 +328,19 @@ const AdminDashboard = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notificationStatus, setNotificationStatus] = useState<
     "granted" | "denied" | "default"
-  >("default");
+  >(Notification.permission as "granted" | "denied" | "default");
   const [loading, setLoading] = useState(!cachedData.isLoaded);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string>("");
   const [hasInitialData, setHasInitialData] = useState(cachedData.isLoaded);
   const [isMounted, setIsMounted] = useState(false);
+  const [showNotificationPopup, setShowNotificationPopup] = useState(false);
+  const [revenueVisible, setRevenueVisible] = useState(false);
 
   const navigate = useNavigate();
   const animationInProgress = useRef(false);
   const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+  const notificationPopupTimeout = useRef<NodeJS.Timeout>();
 
   // Animation handler for stats counters
   const animateStats = useCallback(
@@ -348,6 +388,46 @@ const AdminDashboard = () => {
     },
     [hasInitialData]
   );
+
+  // Setup notifications function with first-time check
+  const setupNotifications = useCallback(async () => {
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        console.warn("No admin token found for notification setup");
+        return;
+      }
+
+      console.log("Setting up Firebase admin notifications...");
+      const result = await requestNotificationPermission(token);
+
+      if (result.success) {
+        console.log("Admin notifications setup successful");
+
+        // Start listening to foreground messages
+        listenToForegroundMessages();
+
+        // Only show success notification for first-time setup
+        if (result.isFirstTimeSetup) {
+          // Check if notifications are supported and permission is granted
+          if (
+            "Notification" in window &&
+            Notification.permission === "granted"
+          ) {
+            new Notification("Diwanu Admin Portal", {
+              body: "Firebase push notifications are now active for your admin account",
+              icon: "/favicon.ico",
+              badge: "/favicon.ico",
+            });
+          }
+        }
+      } else {
+        console.error("Failed to setup admin notifications:", result.error);
+      }
+    } catch (error) {
+      console.error("Error setting up Firebase notifications:", error);
+    }
+  }, []);
 
   // API call handler
   const fetchDashboardStats = useCallback(
@@ -423,21 +503,33 @@ const AdminDashboard = () => {
   // Effects
   useEffect(() => {
     setIsMounted(true);
-    
-    if ("Notification" in window) {
-      setNotificationStatus(
-        Notification.permission as "granted" | "denied" | "default"
-      );
+
+    // Setup notifications if permission is already granted
+    if (hasNotificationPermission()) {
+      setupNotifications();
+    } else if (Notification.permission === "default") {
+      // Check if we should show the popup
+      if (shouldShowNotificationPopup()) {
+        notificationPopupTimeout.current = setTimeout(() => {
+          setShowNotificationPopup(true);
+        }, NOTIFICATION_POPUP_DELAY);
+      }
+    } else if (Notification.permission === "denied") {
+      // Remember that permission was denied
+      localStorage.setItem("fcm_permission_denied", "true");
     }
 
     if (!hasInitialData) {
       fetchDashboardStats();
     }
-    
+
     return () => {
       setIsMounted(false);
+      if (notificationPopupTimeout.current) {
+        clearTimeout(notificationPopupTimeout.current);
+      }
     };
-  }, [fetchDashboardStats, hasInitialData]);
+  }, [fetchDashboardStats, hasInitialData, setupNotifications]);
 
   // Event Handlers
   const handleLogout = () => {
@@ -464,10 +556,42 @@ const AdminDashboard = () => {
     fetchDashboardStats(false, true);
   };
 
+  const handleNotificationPermission = async () => {
+    if ("Notification" in window) {
+      try {
+        const permission = await Notification.requestPermission();
+        setNotificationStatus(permission as "granted" | "denied" | "default");
+        setShowNotificationPopup(false);
+
+        if (permission === "granted") {
+          await setupNotifications();
+          // Remember when setup was completed
+          localStorage.setItem(
+            "fcm_admin_setup_timestamp",
+            Date.now().toString()
+          );
+          localStorage.removeItem("fcm_permission_denied");
+        } else if (permission === "denied") {
+          // Remember that permission was denied
+          localStorage.setItem("fcm_permission_denied", "true");
+        }
+      } catch (error) {
+        console.error("Error requesting notification permission:", error);
+        setShowNotificationPopup(false);
+      }
+    }
+  };
+
+  const handleNotificationDismiss = () => {
+    setShowNotificationPopup(false);
+    // Remember that user dismissed the popup for this session
+    sessionStorage.setItem("fcm_popup_dismissed", "true");
+  };
+
   const handleNavigation = (id: string) => {
     setActiveTab(id);
     setSidebarOpen(false);
-    
+
     switch (id) {
       case "dashboard":
         // Stay on dashboard
@@ -487,6 +611,10 @@ const AdminDashboard = () => {
       default:
         break;
     }
+  };
+
+  const toggleRevenueVisibility = () => {
+    setRevenueVisible(!revenueVisible);
   };
 
   // Configuration Data
@@ -532,11 +660,14 @@ const AdminDashboard = () => {
     },
     {
       title: "Revenue",
-      value: `$${stats.totalRevenue.amount.toLocaleString()}`,
-      icon: DollarSign,
+      value: revenueVisible
+        ? `$${stats.totalRevenue.amount.toLocaleString()}`
+        : "•••••••",
+      icon: revenueVisible ? DollarSign : Lock,
       gradient: "from-purple-500 to-purple-600",
-      change: stats.totalRevenue.change,
-      description: "Total earnings",
+      change: revenueVisible ? stats.totalRevenue.change : "••••",
+      description: revenueVisible ? "Total earnings" : "Confidential data",
+      isRevenue: true,
     },
     {
       title: "Orders",
@@ -621,11 +752,13 @@ const AdminDashboard = () => {
                       ? "bg-gradient-primary text-white shadow-premium scale-105"
                       : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
                   }`}
-                  style={{ 
+                  style={{
                     animationDelay: `${index * 0.1}s`,
-                    animation: isMounted ? 'slide-up 0.3s ease-out forwards' : 'none',
+                    animation: isMounted
+                      ? "slide-up 0.3s ease-out forwards"
+                      : "none",
                     opacity: isMounted ? 1 : 0,
-                    transform: isMounted ? 'translateY(0)' : 'translateY(10px)'
+                    transform: isMounted ? "translateY(0)" : "translateY(10px)",
                   }}
                 >
                   <Icon
@@ -699,7 +832,7 @@ const AdminDashboard = () => {
               {/* Notification Status */}
               {notificationStatus === "granted" ? (
                 <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 text-sm">
-                  <BadgeCheck className="w-4 h-4" />
+                  <BellRing className="w-4 h-4" />
                   <span className="hidden sm:inline">Notifications Active</span>
                 </div>
               ) : notificationStatus === "denied" ? (
@@ -710,10 +843,20 @@ const AdminDashboard = () => {
                   </span>
                 </div>
               ) : (
-                <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-muted/50 text-muted-foreground text-sm">
+                <button
+                  onClick={() => {
+                    if (shouldShowNotificationPopup()) {
+                      setShowNotificationPopup(true);
+                    } else {
+                      // If popup shouldn't be shown, directly request permission
+                      handleNotificationPermission();
+                    }
+                  }}
+                  className="flex items-center gap-2 px-3 py-1 rounded-full bg-muted/50 text-muted-foreground text-sm hover:bg-primary/10 hover:text-primary transition-all duration-200 cursor-pointer"
+                >
                   <Bell className="w-4 h-4" />
                   <span className="hidden sm:inline">Enable Notifications</span>
-                </div>
+                </button>
               )}
             </div>
           </div>
@@ -747,23 +890,42 @@ const AdminDashboard = () => {
           <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
             {statCards.map((card, index) => {
               const Icon = card.icon;
+              const isRevenueCard = card.isRevenue;
               return (
                 <Card
                   key={index}
                   className="glass-card border-0 shadow-premium hover:shadow-accent transition-all duration-300 hover:scale-105 group"
-                  style={{ 
+                  style={{
                     animationDelay: `${index * 0.1}s`,
-                    animation: isMounted ? 'scale-in 0.4s ease-out forwards' : 'none',
+                    animation: isMounted
+                      ? "scale-in 0.4s ease-out forwards"
+                      : "none",
                     opacity: isMounted ? 1 : 0,
-                    transform: isMounted ? 'scale(1)' : 'scale(0.95)'
+                    transform: isMounted ? "scale(1)" : "scale(0.95)",
                   }}
                 >
                   <CardContent className="p-6">
                     <div className="flex items-start justify-between">
-                      <div className="space-y-2">
-                        <p className="text-sm font-medium text-muted-foreground">
-                          {card.title}
-                        </p>
+                      <div className="space-y-2 flex-1">
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm font-medium text-muted-foreground">
+                            {card.title}
+                          </p>
+                          {isRevenueCard && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={toggleRevenueVisibility}
+                              className="h-6 w-6 p-0 hover:bg-white/10 transition-all duration-300"
+                            >
+                              {revenueVisible ? (
+                                <EyeOff className="w-3 h-3 text-muted-foreground" />
+                              ) : (
+                                <Eye className="w-3 h-3 text-muted-foreground" />
+                              )}
+                            </Button>
+                          )}
+                        </div>
                         <p className="text-3xl font-bold text-foreground">
                           {card.value}
                         </p>
@@ -778,7 +940,11 @@ const AdminDashboard = () => {
                         </div>
                       </div>
                       <div
-                        className={`p-3 rounded-xl bg-gradient-to-r ${card.gradient} group-hover:scale-110 transition-transform duration-300`}
+                        className={`p-3 rounded-xl bg-gradient-to-r ${
+                          card.gradient
+                        } group-hover:scale-110 transition-transform duration-300 ${
+                          isRevenueCard && !revenueVisible ? "opacity-60" : ""
+                        }`}
                       >
                         <Icon className="w-6 h-6 text-white" />
                       </div>
@@ -792,10 +958,13 @@ const AdminDashboard = () => {
           {/* Content Grid */}
           <section className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             {/* Compact Premium Recent Activity */}
-            <Card className="glass-card border-0 shadow-premium overflow-hidden bg-gradient-to-br from-background via-background/95 to-secondary/5"
-              style={{ 
-                animation: isMounted ? 'fade-in 0.5s ease-out forwards' : 'none',
-                opacity: isMounted ? 1 : 0
+            <Card
+              className="glass-card border-0 shadow-premium overflow-hidden bg-gradient-to-br from-background via-background/95 to-secondary/5"
+              style={{
+                animation: isMounted
+                  ? "fade-in 0.5s ease-out forwards"
+                  : "none",
+                opacity: isMounted ? 1 : 0,
               }}
             >
               <CardHeader className="flex flex-row items-center justify-between pb-3 px-4 bg-gradient-to-r from-primary/5 via-transparent to-accent/5">
@@ -840,11 +1009,15 @@ const AdminDashboard = () => {
                         <div
                           key={`${activity.time}-${index}`}
                           className="group relative flex items-start gap-3 p-3 rounded-xl bg-gradient-to-br from-white/[0.06] via-white/[0.03] to-transparent backdrop-blur-sm border border-white/[0.08] hover:border-white/[0.15] transition-all duration-300 hover:scale-[1.01] hover:shadow-lg"
-                          style={{ 
+                          style={{
                             animationDelay: `${index * 0.05}s`,
-                            animation: isMounted ? 'slide-up 0.3s ease-out forwards' : 'none',
+                            animation: isMounted
+                              ? "slide-up 0.3s ease-out forwards"
+                              : "none",
                             opacity: isMounted ? 1 : 0,
-                            transform: isMounted ? 'translateY(0)' : 'translateY(10px)'
+                            transform: isMounted
+                              ? "translateY(0)"
+                              : "translateY(10px)",
                           }}
                         >
                           {/* Compact Timeline Connector */}
@@ -946,10 +1119,13 @@ const AdminDashboard = () => {
             </Card>
 
             {/* Quick Actions */}
-            <Card className="glass-card border-0 shadow-premium"
-              style={{ 
-                animation: isMounted ? 'fade-in 0.5s ease-out forwards' : 'none',
-                opacity: isMounted ? 1 : 0
+            <Card
+              className="glass-card border-0 shadow-premium"
+              style={{
+                animation: isMounted
+                  ? "fade-in 0.5s ease-out forwards"
+                  : "none",
+                opacity: isMounted ? 1 : 0,
               }}
             >
               <CardHeader>
@@ -1001,7 +1177,119 @@ const AdminDashboard = () => {
           </section>
         </div>
       </main>
-      
+
+      {/* Notification Permission Popup */}
+      {showNotificationPopup && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div
+            className="bg-background/95 backdrop-blur-md border border-border/50 rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden"
+            style={{
+              animation: "popup-scale 0.3s ease-out forwards",
+            }}
+          >
+            {/* Header with gradient */}
+            <div className="bg-gradient-to-r from-primary/10 via-accent/5 to-primary/10 p-6 border-b border-border/30">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-gradient-primary rounded-xl flex items-center justify-center shadow-lg">
+                  <Bell className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-foreground">
+                    Enable Notifications
+                  </h3>
+                  <p className="text-sm text-muted-foreground">
+                    Stay updated with real-time alerts
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="p-6">
+              <div className="space-y-4 mb-6">
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 bg-emerald-500/20 rounded-lg flex items-center justify-center mt-1">
+                    <Activity className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-foreground">
+                      Real-time Updates
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      Get instant alerts for new orders, user registrations, and
+                      system events
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 bg-blue-500/20 rounded-lg flex items-center justify-center mt-1">
+                    <AlertCircle className="w-4 h-4 text-blue-400" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-foreground">
+                      Important Alerts
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      Never miss critical system notifications or urgent admin
+                      tasks
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 bg-purple-500/20 rounded-lg flex items-center justify-center mt-1">
+                    <Settings className="w-4 h-4 text-purple-400" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-foreground">Full Control</p>
+                    <p className="text-sm text-muted-foreground">
+                      You can disable notifications anytime from your browser
+                      settings
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Privacy Note */}
+              <div className="bg-muted/20 rounded-lg p-3 mb-6 border border-border/30">
+                <div className="flex items-center gap-2 mb-1">
+                  <BadgeCheck className="w-4 h-4 text-emerald-400" />
+                  <span className="text-sm font-medium text-foreground">
+                    Privacy Protected
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  We only send essential admin notifications. No marketing or
+                  promotional messages.
+                </p>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3">
+                <Button
+                  onClick={handleNotificationPermission}
+                  className="flex-1 btn-primary text-white hover:scale-105 transition-all duration-300"
+                >
+                  <Bell className="w-4 h-4 mr-2" />
+                  Enable Notifications
+                </Button>
+                <Button
+                  onClick={handleNotificationDismiss}
+                  variant="outline"
+                  className="px-6 border-border/50 hover:bg-secondary/50"
+                >
+                  Maybe Later
+                </Button>
+              </div>
+            </div>
+
+            {/* Decorative Elements */}
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-primary"></div>
+          </div>
+        </div>
+      )}
+
       {/* Add CSS for smooth animations */}
       <style>
         {`
@@ -1033,6 +1321,17 @@ const AdminDashboard = () => {
             }
             to {
               opacity: 1;
+            }
+          }
+          
+          @keyframes popup-scale {
+            from {
+              opacity: 0;
+              transform: scale(0.9) translateY(-10px);
+            }
+            to {
+              opacity: 1;
+              transform: scale(1) translateY(0);
             }
           }
         `}
